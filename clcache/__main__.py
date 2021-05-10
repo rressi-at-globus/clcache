@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 from tempfile import TemporaryFile
-from typing import Any, List, Tuple, Iterator
+from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
 VERSION = "4.2.0-dev"
@@ -63,9 +63,14 @@ CL_DEFAULT_CODEC = 'mbcs'
 MAX_MANIFEST_HASHES = 100
 
 # String, by which BASE_DIR will be replaced in paths, stored in manifests.
-# ? is invalid character for file name, so it seems ok
+# ? is invalid character for file name, so it seems ok (https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
 # to use it as mark for relative path.
 BASEDIR_REPLACEMENT = '?'
+
+# String, by which BUILD_DIR will be replaced in paths, stored in manifests.
+# * is invalid character for file name, so it seems ok (https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
+# to use it as mark for relative path.
+BUILDDIR_REPLACEMENT = '*'
 
 # Define some Win32 API constants here to avoid dependency on win32pipe
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
@@ -108,7 +113,7 @@ def childDirectories(path, absolute=True):
                 yield absPath if absolute else entry
 
 
-def normalizeBaseDir(baseDir):
+def normalizeDir(baseDir):
     if baseDir:
         baseDir = os.path.normcase(baseDir)
         if baseDir.endswith(os.path.sep):
@@ -272,12 +277,12 @@ class ManifestRepository:
         # exceptions to this rule is the /MP switch, which only defines how many
         # compiler processes are running simultaneusly.  Arguments that specify
         # the compiler where to find the source files are parsed to replace
-        # ocurrences of CLCACHE_BASEDIR by a placeholder.
+        # ocurrences of CLCACHE_BASEDIR and CLCACHE_BUILDDIR by a placeholder.
         arguments, inputFiles = CommandLineAnalyzer.parseArgumentsAndInputFiles(commandLine)
-        collapseBasedirInCmdPath = lambda path: collapseBasedirToPlaceholder(os.path.normcase(os.path.abspath(path)))
+        collapseBasedirInCmdPath = lambda path: collapseDirToPlaceholder(os.path.normcase(os.path.abspath(path)))
 
         commandLine = []
-        argumentsWithPaths = ("AI", "I", "FU")
+        argumentsWithPaths = ("AI", "I", "FU", "external:I")
         for k in sorted(arguments.keys()):
             if k in argumentsWithPaths:
                 commandLine.extend(["/" + k + collapseBasedirInCmdPath(arg) for arg in arguments[k]])
@@ -458,6 +463,8 @@ class CompilerArtifactsRepository:
 
     @staticmethod
     def computeKeyNodirect(compilerBinary, commandLine, environment):
+        printTraceStatement("computeKeyNodirect")
+
         ppcmd = ["/EP"] + [arg for arg in commandLine if arg not in ("-c", "/c")]
 
         returnCode, preprocessedSourceCode, ppStderrBinary = \
@@ -470,6 +477,8 @@ class CompilerArtifactsRepository:
         compilerHash = getCompilerHash(compilerBinary)
         normalizedCmdLine = CompilerArtifactsRepository._normalizedCommandLine(commandLine)
 
+        # preprocessedSourceCode = substituteDirPlaceholder(preprocessedSourceCode)
+
         h = HashAlgorithm()
         h.update(compilerHash.encode("UTF-8"))
         h.update(' '.join(normalizedCmdLine).encode("UTF-8"))
@@ -478,12 +487,13 @@ class CompilerArtifactsRepository:
 
     @staticmethod
     def _normalizedCommandLine(cmdline):
+        printTraceStatement("_normalizedCommandLine")
         # Remove all arguments from the command line which only influence the
         # preprocessor; the preprocessor's output is already included into the
         # hash sum so we don't have to care about these switches in the
         # command line as well.
         argsToStrip = ("AI", "C", "E", "P", "FI", "u", "X",
-                       "FU", "D", "EP", "Fx", "U", "I")
+                       "FU", "D", "EP", "Fx", "U", "I", "external")
 
         # Also remove the switch for specifying the output file name; we don't
         # want two invocations which are identical except for the output file
@@ -495,8 +505,10 @@ class CompilerArtifactsRepository:
         # command line).
         argsToStrip += ("MP",)
 
-        return [arg for arg in cmdline
+        result = [arg for arg in cmdline
                 if not (arg[0] in "/-" and arg[1:].startswith(argsToStrip))]
+        printTraceStatement("Arguments (normalized) '{}'".format(result))
+        return result
 
 class CacheFileStrategy:
     def __init__(self, cacheDirectory=None):
@@ -914,18 +926,33 @@ def getFileHashes(filePaths):
                 else:
                     raise
     else:
-        return [getFileHash(filePath) for filePath in filePaths]
+        return [getFileHashCached(filePath) for filePath in filePaths]
 
+knownHashes: Dict[str, str] = dict()
+def getFileHashCached(filePath):
+    if filePath in knownHashes:
+        return knownHashes[filePath]
+    c = getFileHash(filePath)
+    knownHashes[filePath] = c
+    return c
 
 def getFileHash(filePath, additionalData=None):
     hasher = HashAlgorithm()
     with open(filePath, 'rb') as inFile:
-        hasher.update(inFile.read())
+        if isGeneratedFile(filePath):
+            hasher.update(substituteDirPlaceholder(inFile.read()))
+        else:
+            hasher.update(inFile.read())
+
+    printTraceStatement("File hash: {} => {}".format(filePath, hasher.hexdigest()))
+
     if additionalData is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(additionalData.encode("UTF-8"))
+        printTraceStatement("AdditionalData Hash: {}: {}".format(hasher.hexdigest(), additionalData))
+
     return hasher.hexdigest()
 
 
@@ -935,18 +962,23 @@ def getStringHash(dataString):
     return hasher.hexdigest()
 
 
-def expandBasedirPlaceholder(path):
-    baseDir = normalizeBaseDir(os.environ.get('CLCACHE_BASEDIR'))
+def expandDirPlaceholder(path):
     if path.startswith(BASEDIR_REPLACEMENT):
+        baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
         if not baseDir:
             raise LogicException('No CLCACHE_BASEDIR set, but found relative path ' + path)
         return path.replace(BASEDIR_REPLACEMENT, baseDir, 1)
+    elif path.startswith(BUILDDIR_REPLACEMENT):
+        buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
+        if buildDir is None:
+            buildDir = normalizeDir(os.getcwd())
+
+        return path.replace(BUILDDIR_REPLACEMENT, buildDir, 1)
     else:
         return path
 
-
-def collapseBasedirToPlaceholder(path):
-    baseDir = normalizeBaseDir(os.environ.get('CLCACHE_BASEDIR'))
+def collapseBaseDirToPlaceholder(path):
+    baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
     if baseDir is None:
         return path
     else:
@@ -957,6 +989,56 @@ def collapseBasedirToPlaceholder(path):
         else:
             return path
 
+def collapseBuildDirToPlaceholder(path):
+    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
+    if buildDir is None:
+        buildDir = normalizeDir(os.getcwd())
+
+    assert path == os.path.normcase(path)
+    assert buildDir == os.path.normcase(buildDir)
+    if path.startswith(buildDir):
+        return path.replace(buildDir, BUILDDIR_REPLACEMENT, 1)
+    else:
+        return path
+
+def collapseDirToPlaceholder(path):
+    path = collapseBaseDirToPlaceholder(path)
+    path = collapseBuildDirToPlaceholder(path)
+    return path
+
+def isGeneratedFile(path):
+    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
+    if buildDir is None:
+        buildDir = normalizeDir(os.getcwd())
+
+    return os.path.normcase(os.path.abspath(path)).startswith(buildDir)
+
+def substituteBaseDirPlaceholder(str):
+    baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
+    if baseDir is None:
+        return str
+    else:
+        # Replace CLCACHE_BASEDIR by ? in source code
+        baseDirRegex = re.sub(br'[/\\]', br'[\\/]', baseDir.encode('utf-8'))
+        baseDirRe = re.compile(baseDirRegex, re.IGNORECASE)
+        str = baseDirRe.sub(BASEDIR_REPLACEMENT.encode('utf-8'), str)
+        return str
+
+def substituteBuildDirPlaceholder(str):
+    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
+    if buildDir is None:
+        buildDir = normalizeDir(os.getcwd())
+
+    # Replace CLCACHE_BASEDIR by ? in source code
+    buildDirRegex = re.sub(br'[/\\]', br'[\\/]', buildDir.encode('utf-8'))
+    buildDirRe = re.compile(buildDirRegex, re.IGNORECASE)
+    str = buildDirRe.sub(BUILDDIR_REPLACEMENT.encode('utf-8'), str)
+    return str
+
+def substituteDirPlaceholder(str):
+    str = substituteBaseDirPlaceholder(str)
+    str = substituteBuildDirPlaceholder(str)
+    return str
 
 def ensureDirectoryExists(path):
     try:
@@ -1213,6 +1295,10 @@ class CommandLineAnalyzer:
         ArgumentT2('Zp'), ArgumentT2('Fa'), ArgumentT2('Fd'), ArgumentT2('Fe'),
         ArgumentT2('Fi'), ArgumentT2('Fm'), ArgumentT2('Fo'), ArgumentT2('Fp'),
         ArgumentT2('Wv'),
+        ArgumentT2('experimental:external'), 
+        ArgumentT2('external:anglebrackets'),
+        ArgumentT2('external:W'),
+        ArgumentT2('external:templates'),
         # /NAME[ ]parameter
         ArgumentT3('AI'), ArgumentT3('D'), ArgumentT3('Tc'), ArgumentT3('Tp'),
         ArgumentT3('FI'), ArgumentT3('U'), ArgumentT3('I'), ArgumentT3('F'),
@@ -1220,6 +1306,7 @@ class CommandLineAnalyzer:
         ArgumentT3('w4'), ArgumentT3('wd'), ArgumentT3('we'), ArgumentT3('wo'),
         ArgumentT3('V'),
         ArgumentT3('imsvc'),
+        ArgumentT3('external:I'), ArgumentT3('external:env'),
         # /NAME parameter
         ArgumentT4("Xclang"),
     }
@@ -1522,7 +1609,7 @@ def createManifestEntry(manifestHash, includePaths):
     sortedIncludePaths = sorted(set(includePaths))
     includeHashes = getFileHashes(sortedIncludePaths)
 
-    safeIncludes = [collapseBasedirToPlaceholder(path) for path in sortedIncludePaths]
+    safeIncludes = [collapseDirToPlaceholder(path) for path in sortedIncludePaths]
     includesContentHash = ManifestRepository.getIncludesContentHashForHashes(includeHashes)
     cachekey = CompilerArtifactsRepository.computeKeyDirect(manifestHash, includesContentHash)
 
@@ -1693,21 +1780,33 @@ def scheduleJobs(cache: Any, compiler: str, cmdLine: List[str], environment: Any
 
     exitCode = 0
     cleanupRequired = False
-    with concurrent.futures.ThreadPoolExecutor(max_workers=jobCount(cmdLine)) as executor:
-        jobs = []
-        for (srcFile, srcLanguage), objFile in zip(sourceFiles, objectFiles):
-            jobCmdLine = baseCmdLine + [srcLanguage + srcFile]
-            jobs.append(executor.submit(
-                processSingleSource,
-                compiler, jobCmdLine, srcFile, objFile, environment))
-        for future in concurrent.futures.as_completed(jobs):
-            exitCode, out, err, doCleanup = future.result()
-            printTraceStatement("Finished. Exit code {0:d}".format(exitCode))
-            cleanupRequired |= doCleanup
-            printOutAndErr(out, err)
+    if os.getenv('CLCACHE_SINGLEFILE'):
+        assert len(sourceFiles) == 1
+        assert len(objectFiles) == 1
+        srcFile, srcLanguage = sourceFiles[0]
+        objFile = objectFiles[0]
+        jobCmdLine = baseCmdLine + [srcLanguage + srcFile]
+        exitCode, out, err, doCleanup = processSingleSource(
+            compiler, jobCmdLine, srcFile, objFile, environment)
+        printTraceStatement("Finished. Exit code {0:d}".format(exitCode))
+        cleanupRequired |= doCleanup
+        printOutAndErr(out, err)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobCount(cmdLine)) as executor:
+            jobs = []
+            for (srcFile, srcLanguage), objFile in zip(sourceFiles, objectFiles):
+                jobCmdLine = baseCmdLine + [srcLanguage + srcFile]
+                jobs.append(executor.submit(
+                    processSingleSource,
+                    compiler, jobCmdLine, srcFile, objFile, environment))
+            for future in concurrent.futures.as_completed(jobs):
+                exitCode, out, err, doCleanup = future.result()
+                printTraceStatement("Finished. Exit code {0:d}".format(exitCode))
+                cleanupRequired |= doCleanup
+                printOutAndErr(out, err)
 
-            if exitCode != 0:
-                break
+                if exitCode != 0:
+                    break
 
     if cleanupRequired:
         cleanCache(cache)
@@ -1720,8 +1819,10 @@ def processSingleSource(compiler, cmdLine, sourceFile, objectFile, environment):
         cache = Cache()
 
         if 'CLCACHE_NODIRECT' in os.environ:
+            printTraceStatement("Using non-direct mode")
             return processNoDirect(cache, objectFile, compiler, cmdLine, environment)
         else:
+            printTraceStatement("Using direct mode")
             return processDirect(cache, objectFile, compiler, cmdLine, sourceFile)
 
     except IncludeNotFoundException:
@@ -1739,7 +1840,7 @@ def processDirect(cache, objectFile, compiler, cmdLine, sourceFile):
                 # NOTE: command line options already included in hash for manifest name
                 try:
                     includesContentHash = ManifestRepository.getIncludesContentHashForFiles(
-                        [expandBasedirPlaceholder(path) for path in entry.includeFiles])
+                        [expandDirPlaceholder(path) for path in entry.includeFiles])
 
                     if entry.includesContentHash == includesContentHash:
                         cachekey = entry.objectHash
@@ -1816,10 +1917,25 @@ def ensureArtifactsExist(cache, cachekey, reason, objectFile, compilerResult, ex
                 extraCallable()
     return returnCode, compilerOutput, compilerStderr, cleanupRequired
 
+class ProfilerError(Exception):
+    def __init__(self, returnCode):
+        self.returnCode = returnCode
 
-if __name__ == '__main__':
+def mainWrapper():
     if 'CLCACHE_PROFILE' in os.environ:
         INVOCATION_HASH = getStringHash(','.join(sys.argv))
-        cProfile.run('main()', filename='clcache-{}.prof'.format(INVOCATION_HASH))
+        CALL_SCRIPT = '''
+import clcache
+returnCode = clcache.__main__.main()
+if returnCode != 0:
+    raise clcache.__main__.ProfilerError(returnCode)
+'''
+        try:
+            cProfile.run(CALL_SCRIPT, filename='clcache-{}.prof'.format(INVOCATION_HASH))
+        except ProfilerError as e:
+            sys.exit(e.returnCode)
     else:
         sys.exit(main())
+
+if __name__ == '__main__':
+    mainWrapper()
