@@ -12,6 +12,11 @@ clcache changelog
    command line, instead of with an environment variable, or searching the PATH. 
  * Added support for clang-cl
 
+## clcache 4.2.1 (2021-05-10)
+ * Feature: Add support for `/experimental` and `/external` build switches
+ * Feature: Allow specifying build directory via `CLCACHE_BUILDDIR`
+ * Feature: Substituting source and build directory in generated sources files
+
 ## clcache 4.2.0 (2018-09-06)
 
  * Feature: Enable installation directly from GitHub via 'pip install'
