@@ -76,6 +76,8 @@ BUILDDIR_REPLACEMENT = '*'
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
 ERROR_PIPE_BUSY = 231
 
+RE_UNITY_FILE = re.compile(r'unity_\d+_cxx\.cxx', re.IGNORECASE)
+
 # ManifestEntry: an entry in a manifest file
 # `includeFiles`: list of paths to include files, which this source file uses
 # `includesContentsHash`: hash of the contents of the includeFiles
@@ -939,8 +941,8 @@ def getFileHashCached(filePath):
 def getFileHash(filePath, additionalData=None):
     hasher = HashAlgorithm()
     with open(filePath, 'rb') as inFile:
-        if isGeneratedFile(filePath):
-            hasher.update(substituteDirPlaceholder(inFile.read()))
+        if isUnityBuildFile(filePath):
+            hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
         else:
             hasher.update(inFile.read())
 
@@ -1006,39 +1008,25 @@ def collapseDirToPlaceholder(path):
     path = collapseBuildDirToPlaceholder(path)
     return path
 
-def isGeneratedFile(path):
+def isUnityBuildFile(path):
     buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
     if buildDir is None:
         buildDir = normalizeDir(os.getcwd())
 
-    return os.path.normcase(os.path.abspath(path)).startswith(buildDir)
-
-def substituteBaseDirPlaceholder(str):
+    is_in_buildir = os.path.normcase(os.path.abspath(path)).startswith(buildDir)
+    is_unity_file = bool(RE_UNITY_FILE.match(os.path.basename(path)))
+    return is_in_buildir and is_unity_file
+    
+def substituteIncludeBaseDirPlaceholder(str):
     baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
     if baseDir is None:
         return str
     else:
-        # Replace CLCACHE_BASEDIR by ? in source code
+        # Replace #include "CLCACHE_BASEDIR" by ? in source code
         baseDirRegex = re.sub(br'[/\\]', br'[\\/]', baseDir.encode('utf-8'))
-        baseDirRe = re.compile(baseDirRegex, re.IGNORECASE)
-        str = baseDirRe.sub(BASEDIR_REPLACEMENT.encode('utf-8'), str)
+        baseDirRe = re.compile(br'(#\s*include\s+["<])' + baseDirRegex, re.IGNORECASE)
+        str = baseDirRe.sub(br'\1' + BASEDIR_REPLACEMENT.encode('utf-8'), str)
         return str
-
-def substituteBuildDirPlaceholder(str):
-    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
-    if buildDir is None:
-        buildDir = normalizeDir(os.getcwd())
-
-    # Replace CLCACHE_BASEDIR by ? in source code
-    buildDirRegex = re.sub(br'[/\\]', br'[\\/]', buildDir.encode('utf-8'))
-    buildDirRe = re.compile(buildDirRegex, re.IGNORECASE)
-    str = buildDirRe.sub(BUILDDIR_REPLACEMENT.encode('utf-8'), str)
-    return str
-
-def substituteDirPlaceholder(str):
-    str = substituteBaseDirPlaceholder(str)
-    str = substituteBuildDirPlaceholder(str)
-    return str
 
 def ensureDirectoryExists(path):
     try:
