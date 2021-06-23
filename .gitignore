@@ -10,3 +10,8 @@
 __pycache__
 .eggs/
 venv_py3/
+clcache.build/
+clcache.dist/
+clcache.onefile-build/
+tempcache/
+python39.dll

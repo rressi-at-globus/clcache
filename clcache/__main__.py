@@ -29,7 +29,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.0-dev"
+VERSION = "4.2.1-dev"
 
 HashAlgorithm = hashlib.md5
 
@@ -76,8 +76,6 @@ BUILDDIR_REPLACEMENT = '*'
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
 ERROR_PIPE_BUSY = 231
 
-RE_UNITY_FILE = re.compile(r'unity_\d+_cxx\.cxx', re.IGNORECASE)
-
 # ManifestEntry: an entry in a manifest file
 # `includeFiles`: list of paths to include files, which this source file uses
 # `includesContentsHash`: hash of the contents of the includeFiles
@@ -115,16 +113,41 @@ def childDirectories(path, absolute=True):
                 yield absPath if absolute else entry
 
 
-def normalizeDir(baseDir):
-    if baseDir:
-        baseDir = os.path.normcase(baseDir)
-        if baseDir.endswith(os.path.sep):
-            baseDir = baseDir[0:-1]
-        return baseDir
+def normalizeDir(dir):
+    if dir:
+        dir = os.path.normcase(os.path.realpath(dir))
+        if dir.endswith(os.path.sep):
+            dir = dir[0:-1]
+        return dir
     else:
         # Converts empty string to None
         return None
 
+
+BUILDDIR = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
+
+if BUILDDIR is None or not os.path.exists(BUILDDIR):
+    BUILDDIR = normalizeDir(os.getcwd())
+
+BASEDIR = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
+
+if BASEDIR is None or not os.path.exists(BASEDIR):
+    # try loading from CMakeCache.txt inside CLCACHE_BUILDDIR
+    cmakeCache = BUILDDIR + "/CMakeCache.txt"
+
+    if os.path.exists(cmakeCache):
+        with open(cmakeCache) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or line.startswith('\n'):
+                    continue
+
+                nameAndType, value = line.partition("=")[::2]
+                name, varType = nameAndType.partition(':')[::2]
+                if name == 'CMAKE_HOME_DIRECTORY':
+                    if os.path.exists(value):
+                        BASEDIR = normalizeDir(value)
+                    break
 
 def getCachedCompilerConsoleOutput(path):
     try:
@@ -688,7 +711,7 @@ class PersistentJSONDict:
 
 
 class Configuration:
-    _defaultValues = {"MaximumCacheSize": 1073741824} # 1 GiB
+    _defaultValues = {"MaximumCacheSize": 40737418240} # 40 GiB
 
     def __init__(self, configurationFile):
         self._configurationFile = configurationFile
@@ -941,19 +964,16 @@ def getFileHashCached(filePath):
 def getFileHash(filePath, additionalData=None):
     hasher = HashAlgorithm()
     with open(filePath, 'rb') as inFile:
-        if isUnityBuildFile(filePath):
-            hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
-        else:
-            hasher.update(inFile.read())
+        hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
 
-    printTraceStatement("File hash: {} => {}".format(filePath, hasher.hexdigest()))
+    # printTraceStatement("File hash: {} => {}".format(filePath, hasher.hexdigest()))
 
     if additionalData is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(additionalData.encode("UTF-8"))
-        printTraceStatement("AdditionalData Hash: {}: {}".format(hasher.hexdigest(), additionalData))
+        # printTraceStatement("AdditionalData Hash: {}: {}".format(hasher.hexdigest(), additionalData))
 
     return hasher.hexdigest()
 
@@ -966,67 +986,56 @@ def getStringHash(dataString):
 
 def expandDirPlaceholder(path):
     if path.startswith(BASEDIR_REPLACEMENT):
-        baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
-        if not baseDir:
+        if not BASEDIR:
             raise LogicException('No CLCACHE_BASEDIR set, but found relative path ' + path)
-        return path.replace(BASEDIR_REPLACEMENT, baseDir, 1)
+        return path.replace(BASEDIR_REPLACEMENT, BASEDIR, 1)
     elif path.startswith(BUILDDIR_REPLACEMENT):
-        buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
-        if buildDir is None:
-            buildDir = normalizeDir(os.getcwd())
-
-        return path.replace(BUILDDIR_REPLACEMENT, buildDir, 1)
+        return path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
     else:
         return path
 
 def collapseBaseDirToPlaceholder(path):
-    baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
-    if baseDir is None:
+    if BASEDIR is None:
         return path
     else:
-        assert path == os.path.normcase(path)
-        assert baseDir == os.path.normcase(baseDir)
-        if path.startswith(baseDir):
-            return path.replace(baseDir, BASEDIR_REPLACEMENT, 1)
+        if path.startswith(BASEDIR):
+            return path.replace(BASEDIR, BASEDIR_REPLACEMENT, 1)
         else:
             return path
 
 def collapseBuildDirToPlaceholder(path):
-    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
-    if buildDir is None:
-        buildDir = normalizeDir(os.getcwd())
-
-    assert path == os.path.normcase(path)
-    assert buildDir == os.path.normcase(buildDir)
-    if path.startswith(buildDir):
-        return path.replace(buildDir, BUILDDIR_REPLACEMENT, 1)
+    if path.startswith(BUILDDIR):
+        return path.replace(BUILDDIR, BUILDDIR_REPLACEMENT, 1)
     else:
         return path
 
 def collapseDirToPlaceholder(path):
-    path = collapseBaseDirToPlaceholder(path)
-    path = collapseBuildDirToPlaceholder(path)
-    return path
+    result = collapseBuildDirToPlaceholder(path)
+    result = collapseBaseDirToPlaceholder(result)
+    return result
 
-def isUnityBuildFile(path):
-    buildDir = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
-    if buildDir is None:
-        buildDir = normalizeDir(os.getcwd())
+# Regex for replacing the following with '?':
+# 
+# #include <BASE_DIR/....>  =>  #include <*/....>
+# #include "BASE_DIR/...."  =>  #include "*/...."
+# // BASE_DIR/....          =>  // ?/....
+def getBaseDirRegex():
+    if BASEDIR is None:
+        return None
 
-    is_in_buildir = os.path.normcase(os.path.abspath(path)).startswith(buildDir)
-    is_unity_file = bool(RE_UNITY_FILE.match(os.path.basename(path)))
-    return is_in_buildir and is_unity_file
-    
+    buildPathRelRegex = re.sub(br'[/\\]', br'[\\/]', os.path.relpath(BUILDDIR, BASEDIR).encode('utf-8'))
+    baseDirRegex = re.sub(br'[/\\]', br'[\\/]', BASEDIR.encode('utf-8'))
+    return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex + br'(?![\\/]' + buildPathRelRegex + br')', re.IGNORECASE)
+
+BASE_DIR_RE = getBaseDirRegex()
+
 def substituteIncludeBaseDirPlaceholder(str):
-    baseDir = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
-    if baseDir is None:
+    if BASE_DIR_RE is None:
         return str
     else:
         # Replace #include "CLCACHE_BASEDIR" by ? in source code
-        baseDirRegex = re.sub(br'[/\\]', br'[\\/]', baseDir.encode('utf-8'))
-        baseDirRe = re.compile(br'(#\s*include\s+["<])' + baseDirRegex, re.IGNORECASE)
-        str = baseDirRe.sub(br'\1' + BASEDIR_REPLACEMENT.encode('utf-8'), str)
-        return str
+        result = BASE_DIR_RE.sub(br'\1' + BASEDIR_REPLACEMENT.encode('utf-8'), str)
+        return result
 
 def ensureDirectoryExists(path):
     try:
@@ -1693,6 +1702,8 @@ def main():
 
     printTraceStatement("Found real compiler binary at '{0!s}'".format(compiler))
     printTraceStatement("Arguments we care about: '{}'".format(sys.argv))
+
+    # Determine CL_
 
     if "CLCACHE_DISABLE" in os.environ:
         return invokeRealCompiler(compiler, options.compiler_args)[0]
