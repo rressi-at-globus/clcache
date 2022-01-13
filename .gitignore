@@ -15,3 +15,9 @@ clcache.dist/
 clcache.onefile-build/
 tempcache/
 python39.dll
+manifests/
+objects/
+config.txt
+stats.txt
+clcache_4.2.1_nuitka.rar
+clcache_4.2.1-20211230_nuitka.rar

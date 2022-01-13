@@ -25,11 +25,13 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.1-dev"
+VERSION = "4.2.2-gmed"
+CACHE_VERSION = "4.2.1-dev"
 
 HashAlgorithm = hashlib.md5
 
@@ -222,11 +224,27 @@ class ManifestSection:
         manifestPath = self.manifestPath(manifestHash)
         printTraceStatement("Writing manifest with manifestHash = {} to {}".format(manifestHash, manifestPath))
         ensureDirectoryExists(self.manifestSectionDir)
-        with atomic_write(manifestPath, overwrite=True) as outFile:
-            # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
-            entries = [e._asdict() for e in manifest.entries()]
-            jsonobject = {'entries': entries}
-            json.dump(jsonobject, outFile, sort_keys=True, indent=2)
+
+        success = False
+        for _ in range(60):
+            try:
+                with atomic_write(manifestPath, overwrite=True) as outFile:
+                    # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
+                    entries = [e._asdict() for e in manifest.entries()]
+                    jsonobject = {'entries': entries}
+                    json.dump(jsonobject, outFile, sort_keys=True, indent=2)
+                    success = True
+                    break
+            except:
+                time.sleep(1)
+
+        if not success:
+            with atomic_write(manifestPath, overwrite=True) as outFile:
+                # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
+                entries = [e._asdict() for e in manifest.entries()]
+                jsonobject = {'entries': entries}
+                json.dump(jsonobject, outFile, sort_keys=True, indent=2)
+
 
     def getManifest(self, manifestHash):
         fileName = self.manifestPath(manifestHash)
@@ -693,8 +711,19 @@ class PersistentJSONDict:
 
     def save(self):
         if self._dirty:
-            with atomic_write(self._fileName, overwrite=True) as f:
-                json.dump(self._dict, f, sort_keys=True, indent=4)
+            success = False
+            for _ in range(60):
+                try:
+                    with atomic_write(self._fileName, overwrite=True) as f:
+                        json.dump(self._dict, f, sort_keys=True, indent=4)
+                        success = True
+                        break
+                except:
+                    time.sleep(1)
+
+            if not success:
+                with atomic_write(self._fileName, overwrite=True) as f:
+                    json.dump(self._dict, f, sort_keys=True, indent=4)                                
 
     def __setitem__(self, key, value):
         self._dict[key] = value
@@ -926,7 +955,7 @@ def getCompilerHash(compilerBinary):
     data = '|'.join([
         str(stat.st_mtime),
         str(stat.st_size),
-        VERSION,
+        CACHE_VERSION,
         ])
     hasher = HashAlgorithm()
     hasher.update(data.encode("UTF-8"))
@@ -1594,7 +1623,17 @@ def processCacheHit(cache, objectFile, cachekey):
             stats.registerCacheHit()
 
         if os.path.exists(objectFile):
-            os.remove(objectFile)
+            success = False
+            for _ in range(60):
+                try:
+                    os.remove(objectFile)
+                    success = True
+                    break
+                except:
+                    time.sleep(1)
+
+            if not success:
+                os.remove(objectFile)
 
         cachedArtifacts = cache.getEntry(cachekey)
         copyOrLink(cachedArtifacts.objectFilePath, objectFile)

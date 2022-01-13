@@ -1,0 +1,25 @@
+[settings]
+    arch=x86_64
+    os=Windows
+
+[requires]
+
+
+[options]
+
+
+[full_settings]
+    arch=x86_64
+    os=Windows
+
+[full_requires]
+
+
+[full_options]
+
+
+[recipe_hash]
+    dfaca8b8100215edcca85e42a881b606
+
+[env]
+
