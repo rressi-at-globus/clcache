@@ -8,7 +8,7 @@ class ClcacheConan(ConanFile):
     description = "A compiler cache for Microsoft Visual Studio"
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
-    user = "gmed"
+    user = "dgehri"
     channel = "stable"
 
     def package(self):
