@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.2-gmed"
+VERSION = "4.2.2-dgehri"
 CACHE_VERSION = "4.2.1-dev"
 
 HashAlgorithm = hashlib.md5
@@ -1052,9 +1052,14 @@ def getBaseDirRegex():
     if BASEDIR is None:
         return None
 
-    buildPathRelRegex = re.sub(br'[/\\]', br'[\\/]', os.path.relpath(BUILDDIR, BASEDIR).encode('utf-8'))
     baseDirRegex = re.sub(br'[/\\]', br'[\\/]', BASEDIR.encode('utf-8'))
-    return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex + br'(?![\\/]' + buildPathRelRegex + br')', re.IGNORECASE)
+
+    try:
+        # The following may fail if BUILDDIR is on a different drive than BASEDIR
+        buildPathRelRegex = re.sub(br'[/\\]', br'[\\/]', os.path.relpath(BUILDDIR, BASEDIR).encode('utf-8'))
+        return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex + br'(?![\\/]' + buildPathRelRegex + br')', re.IGNORECASE)
+    except:
+        return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex, re.IGNORECASE)
 
 BASE_DIR_RE = getBaseDirRegex()
 

@@ -5,3 +5,5 @@ set CONAN_REVISIONS_ENABLED=1
 conan export-pkg conanfile.py
 conan upload clcache/* --all -r globus
 popd
+pause
+
