@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.4-dgehri"
+VERSION = "4.2.5-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -325,7 +325,7 @@ class ManifestRepository:
         collapseBasedirInCmdPath = lambda path: collapseDirToPlaceholder(os.path.normcase(os.path.abspath(path)))
 
         commandLine = []
-        argumentsWithPaths = ("AI", "I", "FU", "external:I")
+        argumentsWithPaths = ("AI", "I", "FU", "external:I", "imsvc")
         for k in sorted(arguments.keys()):
             if k in argumentsWithPaths:
                 commandLine.extend(["/" + k + collapseBasedirInCmdPath(arg) for arg in arguments[k]])
@@ -536,7 +536,7 @@ class CompilerArtifactsRepository:
         # hash sum so we don't have to care about these switches in the
         # command line as well.
         argsToStrip = ("AI", "C", "E", "P", "FI", "u", "X",
-                       "FU", "D", "EP", "Fx", "U", "I", "external")
+                       "FU", "D", "EP", "Fx", "U", "I", "external", "imsvc")
 
         # Also remove the switch for specifying the output file name; we don't
         # want two invocations which are identical except for the output file
@@ -1374,6 +1374,8 @@ class CommandLineAnalyzer:
                         if not value:
                             value = cmdline[i + 1]
                             i += 1
+                        elif value[0].isspace():
+                            value = value[1:]
                     elif isinstance(arg, ArgumentT4):
                         value = cmdline[i + 1]
                         i += 1
