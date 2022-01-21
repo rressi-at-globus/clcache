@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.5-dgehri"
+VERSION = "4.2.6-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -388,8 +388,7 @@ class CacheLock:
         if result not in [0, self.WAIT_ABANDONED_CODE]:
             if result == self.WAIT_TIMEOUT_CODE:
                 errorString = \
-                    'Failed to acquire lock {} after {}ms; ' \
-                    'try setting CLCACHE_OBJECT_CACHE_TIMEOUT_MS environment variable to a larger value.'.format(
+                    'Failed to acquire lock {} after {}ms -- bypassing cache.'.format(
                         self._mutexName, self._timeoutMs)
             else:
                 errorString = 'Error! WaitForSingleObject returns {result}, last error {error}'.format(
@@ -402,7 +401,7 @@ class CacheLock:
 
     @staticmethod
     def forPath(path):
-        timeoutMs = int(os.environ.get('CLCACHE_OBJECT_CACHE_TIMEOUT_MS', 10 * 1000))
+        timeoutMs = 1000
         lockName = path.replace(':', '-').replace('\\', '-')
         return CacheLock(lockName, timeoutMs)
 
@@ -1825,7 +1824,8 @@ def scheduleJobs(cache: Any, compiler: str, cmdLine: List[str], environment: Any
 
     exitCode = 0
     cleanupRequired = False
-    if os.getenv('CLCACHE_SINGLEFILE'):
+
+    if (len(sourceFiles) == 1 and len(objectFiles) == 1) or os.getenv('CLCACHE_SINGLEFILE'):
         assert len(sourceFiles) == 1
         assert len(objectFiles) == 1
         srcFile, srcLanguage = sourceFiles[0]
@@ -1871,9 +1871,12 @@ def processSingleSource(compiler, cmdLine, sourceFile, objectFile, environment):
             return processDirect(cache, objectFile, compiler, cmdLine, sourceFile)
 
     except IncludeNotFoundException:
-        return invokeRealCompiler(compiler, cmdLine, environment=environment), False
+        return *invokeRealCompiler(compiler, cmdLine, environment=environment), False
     except CompilerFailedException as e:
         return e.getReturnTuple()
+    except CacheLockException as e:
+        printTraceStatement(repr(e))
+        return *invokeRealCompiler(compiler, cmdLine, environment=environment), False
 
 def processDirect(cache, objectFile, compiler, cmdLine, sourceFile):
     manifestHash = ManifestRepository.getManifestHash(compiler, cmdLine, sourceFile)
