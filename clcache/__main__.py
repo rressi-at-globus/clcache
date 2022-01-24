@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.6-dgehri"
+VERSION = "4.2.7-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -401,7 +401,7 @@ class CacheLock:
 
     @staticmethod
     def forPath(path):
-        timeoutMs = 1000
+        timeoutMs = 10 * 1000
         lockName = path.replace(':', '-').replace('\\', '-')
         return CacheLock(lockName, timeoutMs)
 
@@ -1760,8 +1760,13 @@ def main():
 
 
 def updateCacheStatistics(cache, method):
-    with cache.statistics.lock, cache.statistics as stats:
-        method(stats)
+    try:
+        with cache.statistics.lock, cache.statistics as stats:
+            method(stats)
+    except CacheLockException as e:
+        # Ignore cache lock exception for stats
+        printTraceStatement(repr(e))
+        
 
 def printOutAndErr(out, err):
     printBinary(sys.stdout, out.encode(CL_DEFAULT_CODEC))
