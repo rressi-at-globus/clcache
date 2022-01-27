@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.7-dgehri"
+VERSION = "4.2.8-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -388,7 +388,7 @@ class CacheLock:
         if result not in [0, self.WAIT_ABANDONED_CODE]:
             if result == self.WAIT_TIMEOUT_CODE:
                 errorString = \
-                    'Failed to acquire lock {} after {}ms -- bypassing cache.'.format(
+                    'Failed to acquire lock {} after {}ms.'.format(
                         self._mutexName, self._timeoutMs)
             else:
                 errorString = 'Error! WaitForSingleObject returns {result}, last error {error}'.format(
@@ -1859,7 +1859,10 @@ def scheduleJobs(cache: Any, compiler: str, cmdLine: List[str], environment: Any
                     break
 
     if cleanupRequired:
-        cleanCache(cache)
+        try:
+            cleanCache(cache)
+        except CacheLockException as e:
+            printTraceStatement(repr(e))
 
     return exitCode
 
