@@ -30,7 +30,7 @@ from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.8-dgehri"
+VERSION = "4.2.9-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -151,14 +151,44 @@ if BASEDIR is None or not os.path.exists(BASEDIR):
                         BASEDIR = normalizeDir(value)
                     break
 
-def getCachedCompilerConsoleOutput(path):
+# Need to substitute BASEDIR and BUILDDIR in the following
+# - "^<some text w/o colons> <path>[^:]*:"
+# - "^<path>[^:]*:"
+def getBaseDirDiagnosticsRegex(path):
+    regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{path})([^:?*"<>|]+:)';
+    return re.compile(regex, re.IGNORECASE | re.MULTILINE)
+
+BASEDIR_DIAG_RE = getBaseDirDiagnosticsRegex(re.sub(r'[/\\]', r'[\\\\/]', BASEDIR)) if BASEDIR is not None else None
+BASEDIR_DIAG_RE_INV = getBaseDirDiagnosticsRegex(re.escape(BASEDIR_REPLACEMENT)) if BASEDIR is not None else None
+BASEDIR_ESC = BASEDIR.replace('\\', '/')
+
+def getBuildDirDiagnosticsRegex(path):
+    regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{path})([^:?*"<>|]+:)';
+    return re.compile(regex, re.IGNORECASE | re.MULTILINE)
+
+BUILDDIR_DIAG_RE = getBuildDirDiagnosticsRegex(re.sub(r'[/\\]', r'[\\\\/]', BUILDDIR))
+BUILDDIR_DIAG_RE_INV = getBuildDirDiagnosticsRegex(re.escape(BUILDDIR_REPLACEMENT))
+BUILDDIR_ESC = BUILDDIR.replace('\\', '/')
+
+def getCachedCompilerConsoleOutput(path, translatePaths = False):
     try:
         with open(path, 'rb') as f:
-            return f.read().decode(CACHE_COMPILER_OUTPUT_STORAGE_CODEC)
+            output = f.read().decode(CACHE_COMPILER_OUTPUT_STORAGE_CODEC)
+            if translatePaths:
+                output = BUILDDIR_DIAG_RE_INV.sub(rf"\1{BUILDDIR_ESC}\2", output)
+                if BASEDIR_DIAG_RE_INV is not None:
+                    output = BASEDIR_DIAG_RE_INV.sub(rf"\1{BASEDIR_ESC}\2", output)
+            return output
     except IOError:
         return ''
 
-def setCachedCompilerConsoleOutput(path, output):
+def setCachedCompilerConsoleOutput(path, output, translatePaths = False):
+    if translatePaths:
+        output = BUILDDIR_DIAG_RE.sub(rf"\1{BUILDDIR_REPLACEMENT}\2", output)
+
+        if BASEDIR_DIAG_RE is not None:
+            output = BASEDIR_DIAG_RE.sub(rf"\1{BASEDIR_REPLACEMENT}\2", output)
+
     with open(path, 'wb') as f:
         f.write(output.encode(CACHE_COMPILER_OUTPUT_STORAGE_CODEC))
 
@@ -442,7 +472,7 @@ class CompilerArtifactsSection:
                                        artifacts.stdout)
         if artifacts.stderr != '':
             setCachedCompilerConsoleOutput(os.path.join(tempEntryDir, CompilerArtifactsSection.STDERR_FILE),
-                                           artifacts.stderr)
+                                           artifacts.stderr, True)
         # Replace the full cache entry atomically
         os.replace(tempEntryDir, cacheEntryDir)
         return size
@@ -453,7 +483,7 @@ class CompilerArtifactsSection:
         return CompilerArtifacts(
             os.path.join(cacheEntryDir, CompilerArtifactsSection.OBJECT_FILE),
             getCachedCompilerConsoleOutput(os.path.join(cacheEntryDir, CompilerArtifactsSection.STDOUT_FILE)),
-            getCachedCompilerConsoleOutput(os.path.join(cacheEntryDir, CompilerArtifactsSection.STDERR_FILE))
+            getCachedCompilerConsoleOutput(os.path.join(cacheEntryDir, CompilerArtifactsSection.STDERR_FILE), True)
             )
 
 
@@ -1047,27 +1077,29 @@ def collapseDirToPlaceholder(path):
 # #include <BASE_DIR/....>  =>  #include <*/....>
 # #include "BASE_DIR/...."  =>  #include "*/...."
 # // BASE_DIR/....          =>  // ?/....
-def getBaseDirRegex():
+def getBaseDirSourceRegex():
     if BASEDIR is None:
         return None
 
-    baseDirRegex = re.sub(br'[/\\]', br'[\\/]', BASEDIR.encode('utf-8'))
+    baseDirRegex = re.sub(r'[/\\]', r'[\\\\/]', BASEDIR)
 
     try:
         # The following may fail if BUILDDIR is on a different drive than BASEDIR
-        buildPathRelRegex = re.sub(br'[/\\]', br'[\\/]', os.path.relpath(BUILDDIR, BASEDIR).encode('utf-8'))
-        return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex + br'(?![\\/]' + buildPathRelRegex + br')', re.IGNORECASE)
+        buildPathRelRegex = re.sub(r'[/\\]', r'[\\\\/]', os.path.relpath(BUILDDIR, BASEDIR))
+        fullRegex = rf'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*)){baseDirRegex}(?![\\/]{buildPathRelRegex})'
+        return re.compile(fullRegex.encode(), re.IGNORECASE)
     except:
-        return re.compile(br'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*))' + baseDirRegex, re.IGNORECASE)
+        fullRegex = rf'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*)){baseDirRegex}'
+        return re.compile(fullRegex.encode(), re.IGNORECASE)
 
-BASE_DIR_RE = getBaseDirRegex()
+BASE_DIR_SRC_RE = getBaseDirSourceRegex()
 
-def substituteIncludeBaseDirPlaceholder(str):
-    if BASE_DIR_RE is None:
+def substituteIncludeBaseDirPlaceholder(str: str):
+    if BASE_DIR_SRC_RE is None:
         return str
     else:
         # Replace #include "CLCACHE_BASEDIR" by ? in source code
-        result = BASE_DIR_RE.sub(br'\1' + BASEDIR_REPLACEMENT.encode('utf-8'), str)
+        result = BASE_DIR_SRC_RE.sub(rb'\1' + BASEDIR_REPLACEMENT.encode(), str)
         return result
 
 def ensureDirectoryExists(path):
