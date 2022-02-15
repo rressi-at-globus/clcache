@@ -9,7 +9,7 @@ class ClcacheConan(ConanFile):
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
     user = "dgehri"
-    channel = "stable"
+    channel = "dev"
 
     def package(self):
         self.copy("*", dst="bin", src="../clcache.dist")
