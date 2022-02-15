@@ -26,11 +26,13 @@ import subprocess
 import sys
 import threading
 import time
+import scandir
+import contextlib
 from tempfile import TemporaryFile
 from typing import Any, List, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 
-VERSION = "4.2.9-dgehri"
+VERSION = "4.2.10-dgehri"
 CACHE_VERSION = "4.2.4"
 
 HashAlgorithm = hashlib.md5
@@ -158,15 +160,15 @@ def getBaseDirDiagnosticsRegex(path):
     regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{path})([^:?*"<>|]+:)';
     return re.compile(regex, re.IGNORECASE | re.MULTILINE)
 
-BASEDIR_DIAG_RE = getBaseDirDiagnosticsRegex(re.sub(r'[/\\]', r'[\\\\/]', BASEDIR)) if BASEDIR is not None else None
+BASEDIR_DIAG_RE = getBaseDirDiagnosticsRegex(re.sub(r'[\\\/]', r'[\\\\\/]', BASEDIR)) if BASEDIR is not None else None
 BASEDIR_DIAG_RE_INV = getBaseDirDiagnosticsRegex(re.escape(BASEDIR_REPLACEMENT)) if BASEDIR is not None else None
-BASEDIR_ESC = BASEDIR.replace('\\', '/')
+BASEDIR_ESC = BASEDIR.replace('\\', '/') if BASEDIR is not None else None
 
 def getBuildDirDiagnosticsRegex(path):
     regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{path})([^:?*"<>|]+:)';
     return re.compile(regex, re.IGNORECASE | re.MULTILINE)
 
-BUILDDIR_DIAG_RE = getBuildDirDiagnosticsRegex(re.sub(r'[/\\]', r'[\\\\/]', BUILDDIR))
+BUILDDIR_DIAG_RE = getBuildDirDiagnosticsRegex(re.sub(r'[\\\/]', r'[\\\\\/]', BUILDDIR))
 BUILDDIR_DIAG_RE_INV = getBuildDirDiagnosticsRegex(re.escape(BUILDDIR_REPLACEMENT))
 BUILDDIR_ESC = BUILDDIR.replace('\\', '/')
 
@@ -1049,28 +1051,66 @@ def expandDirPlaceholder(path):
         return path.replace(BASEDIR_REPLACEMENT, BASEDIR, 1)
     elif path.startswith(BUILDDIR_REPLACEMENT):
         return path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
+    elif path.startswith(CONANDIR_REPLACEMENT):
+        return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
     else:
         return path
 
 def collapseBaseDirToPlaceholder(path):
     if BASEDIR is None:
-        return path
+        return (path, False)
     else:
         if path.startswith(BASEDIR):
-            return path.replace(BASEDIR, BASEDIR_REPLACEMENT, 1)
+            return (path.replace(BASEDIR, BASEDIR_REPLACEMENT, 1), True)
         else:
-            return path
+            return (path, False)
 
 def collapseBuildDirToPlaceholder(path):
     if path.startswith(BUILDDIR):
-        return path.replace(BUILDDIR, BUILDDIR_REPLACEMENT, 1)
+        return (path.replace(BUILDDIR, BUILDDIR_REPLACEMENT, 1), True)
     else:
-        return path
+        return (path, False)
+
+def get_conan_user_home_short_re():
+    conan_user_home_short = os.environ.get('CONAN_USER_HOME_SHORT')
+    if conan_user_home_short:
+        return re.sub(r'[\\\/]', r'[\\\\\/]', conan_user_home_short)
+    return r"[a-z]:[\\\/].conan"
+
+def get_conan_user_home():
+    conan_user_home = os.environ.get('CONAN_USER_HOME')
+    if conan_user_home is None:
+        conan_user_home = rf"{os.environ.get('USERPROFILE')}"
+    return os.path.normcase(os.path.abspath(conan_user_home)).rstrip("\\/")
+
+CONAN_USER_HOME = get_conan_user_home()
+
+def get_conan_user_home_re():
+    return "^" + re.sub(r'[\\\/]', r'[\\\\\/]', CONAN_USER_HOME) + r"(?=[\\\/]\.conan)"
+
+RE_CONAN_USER_HOME = re.compile(get_conan_user_home_re(), re.IGNORECASE)
+RE_CONAN_USER_SHORT = re.compile(rf"^({get_conan_user_home_short_re()}[\\\/][0-9a-f]+[\\\/])", re.IGNORECASE)
+CONANDIR_REPLACEMENT = '>'
+
+def canonicalizeConanPath(str: str):
+    m = RE_CONAN_USER_SHORT.match(str)
+    if m is not None:
+        real_path_file = f"{m.group(1)}real_path.txt"
+        if os.path.isfile(real_path_file):
+            with open(real_path_file, "r") as f:
+                real_path = f.readline()
+                return (RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, real_path), True)
+                
+    return (RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, str), True)
+    
 
 def collapseDirToPlaceholder(path):
-    result = collapseBuildDirToPlaceholder(path)
-    result = collapseBaseDirToPlaceholder(result)
-    return result
+    (path, done) = collapseBuildDirToPlaceholder(path)
+    if not done:
+        (path, done) = collapseBaseDirToPlaceholder(path)
+        if not done:
+            (path, done) = canonicalizeConanPath(path)
+    return path
 
 # Regex for replacing the following with '?':
 # 
@@ -1081,11 +1121,11 @@ def getBaseDirSourceRegex():
     if BASEDIR is None:
         return None
 
-    baseDirRegex = re.sub(r'[/\\]', r'[\\\\/]', BASEDIR)
+    baseDirRegex = re.sub(r'[\\\/]', r'[\\\\\/]', BASEDIR)
 
     try:
         # The following may fail if BUILDDIR is on a different drive than BASEDIR
-        buildPathRelRegex = re.sub(r'[/\\]', r'[\\\\/]', os.path.relpath(BUILDDIR, BASEDIR))
+        buildPathRelRegex = re.sub(r'[\\\/]', r'[\\\\\/]', os.path.relpath(BUILDDIR, BASEDIR))
         fullRegex = rf'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*)){baseDirRegex}(?![\\/]{buildPathRelRegex})'
         return re.compile(fullRegex.encode(), re.IGNORECASE)
     except:

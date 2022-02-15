@@ -105,7 +105,7 @@ CLCACHE_SERVER::
     running `clcachesrv.py` script which takes care of caching file hashes.
     This greatly improves performance of cache hits, but only has an effect in
     direct mode (i.e. when `CLCACHE_NODIRECT` is not set).
-CLCACHE_MEMCACHED::
+CLCACHE_MEMCACHED_IP::
     This variable can be used to make clcache use a
     memcached[https://memcached.org/] backend for saving and restoring cached
     data. The variable is assumed to hold the host and port information of the
