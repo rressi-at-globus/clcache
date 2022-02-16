@@ -1273,7 +1273,18 @@ def expandDirPlaceholder(path):
     elif path.startswith(BUILDDIR_REPLACEMENT):
         return path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
     elif path.startswith(CONANDIR_REPLACEMENT):
-        return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
+        # This case is more complicated: if the path doesn't exist, we
+        # need to inspect the package directory .conan_link files, which
+        # will contain the correct path
+        # The result of the below will be: ['>', '.conan', 'data', '<package>', '<version>', '<user>', '<channel>', '<package>', '<hash>', ...]
+        path_parts = os.path.normpath(path).split(os.path.sep)
+        link_file = os.path.join(CONAN_USER_HOME, os.path.sep.join(path_parts[1:9]), ".conan_link")
+        if os.path.isfile(link_file):
+            with open(link_file, "r") as f:
+                short_path = f.readline()
+                return os.path.join(short_path, os.path.sep.join(path_parts[9:]))
+        else:
+            return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
     else:
         return path
 
@@ -1310,18 +1321,21 @@ def get_conan_user_home_re():
     return "^" + re.sub(r'[\\\/]', r'[\\\\\/]', CONAN_USER_HOME) + r"(?=[\\\/]\.conan)"
 
 RE_CONAN_USER_HOME = re.compile(get_conan_user_home_re(), re.IGNORECASE)
-RE_CONAN_USER_SHORT = re.compile(rf"^({get_conan_user_home_short_re()}[\\\/][0-9a-f]+[\\\/])", re.IGNORECASE)
+RE_CONAN_USER_SHORT = re.compile(rf"^({get_conan_user_home_short_re()}[\\\/][0-9a-f]+[\\\/]1(?=[\\\/]))", re.IGNORECASE)
 CONANDIR_REPLACEMENT = '>'
 
 def canonicalizeConanPath(str: str):
+    # Check for Conan short folder (c:\.conan\)
     m = RE_CONAN_USER_SHORT.match(str)
     if m is not None:
-        real_path_file = f"{m.group(1)}real_path.txt"
+        real_path_file = os.path.join(os.path.dirname(m.group(1)), "real_path.txt")
         if os.path.isfile(real_path_file):
             with open(real_path_file, "r") as f:
+                # Transform to long form
                 real_path = f.readline()
-                return (RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, real_path), True)
+                str = RE_CONAN_USER_SHORT.sub(real_path.replace("\\", "\\\\"), str)
                 
+    # Otherwise check for long folder
     return (RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, str), True)
     
 
@@ -1889,7 +1903,7 @@ def parseIncludesSet(compilerOutput, sourceFile, strip):
         match = reFilePath.match(line.rstrip('\r\n'))
         if match is not None:
             filePath = match.group('file_path')
-            filePath = os.path.normcase(os.path.abspath(filePath))
+            filePath = os.path.normcase(os.path.abspath(os.path.normpath(filePath)))
             if filePath != absSourceFile:
                 includesSet.add(filePath)
         elif strip:
