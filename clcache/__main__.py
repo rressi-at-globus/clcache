@@ -1361,16 +1361,6 @@ def canonicalizeQtPath(str: str):
     return (result, result is not str)
 
 def collapseDirToPlaceholder(path):
-    if BASEDIR is None:
-        printTraceStatement("BASEDIR = None")
-    else:
-        printTraceStatement(f"BASEDIR = {BASEDIR}")
-
-    if BASEDIR is None:
-        printTraceStatement("BUILDDIR = None")
-    else:
-        printTraceStatement(f"BUILDDIR = {BUILDDIR}")
-
     (path, done) = collapseBuildDirToPlaceholder(path)
     if done:
         return path
