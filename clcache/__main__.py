@@ -37,7 +37,7 @@ from pymemcache.serde import (python_memcache_serializer,
 
 
 VERSION = "4.2.10-dgehri"
-CACHE_VERSION = "4.2.4"
+CACHE_VERSION = "3"
 
 HashAlgorithm = hashlib.md5
 
@@ -71,14 +71,10 @@ CL_DEFAULT_CODEC = 'mbcs'
 MAX_MANIFEST_HASHES = 100
 
 # String, by which BASE_DIR will be replaced in paths, stored in manifests.
-# ? is invalid character for file name, so it seems ok (https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
-# to use it as mark for relative path.
-BASEDIR_REPLACEMENT = '?'
+BASEDIR_REPLACEMENT = "<BASE_DIR>"
 
 # String, by which BUILD_DIR will be replaced in paths, stored in manifests.
-# * is invalid character for file name, so it seems ok (https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
-# to use it as mark for relative path.
-BUILDDIR_REPLACEMENT = '*'
+BUILDDIR_REPLACEMENT = "<BUILD_DIR>"
 
 # Define some Win32 API constants here to avoid dependency on win32pipe
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
@@ -1264,6 +1260,7 @@ def getStringHash(dataString):
     hasher.update(dataString.encode("UTF-8"))
     return hasher.hexdigest()
 
+RE_ENV = re.compile(r'^<env:([^>]+)>', flags=re.IGNORECASE)
 
 def expandDirPlaceholder(path):
     if path.startswith(BASEDIR_REPLACEMENT):
@@ -1288,6 +1285,13 @@ def expandDirPlaceholder(path):
     elif path.startswith(QTDIR_REPLACEMENT) and QT_DIR is not None:
         return path.replace(QTDIR_REPLACEMENT, QT_DIR, 1)
     else:
+        m = RE_ENV.match(path)
+        if m is not None:
+            env_val = os.environ.get(m.group(1))
+            if env_val is not None:
+                real_path = os.path.realpath(os.path.normcase(os.path.normpath(env_val)))
+                return RE_ENV.sub(real_path.replace("\\", "\\\\"), path)
+            pass
         return path
 
 def collapseBaseDirToPlaceholder(path):
@@ -1324,7 +1328,7 @@ def get_conan_user_home_re():
 
 RE_CONAN_USER_HOME = re.compile(get_conan_user_home_re(), re.IGNORECASE)
 RE_CONAN_USER_SHORT = re.compile(rf"^({get_conan_user_home_short_re()}[\\\/][0-9a-f]+[\\\/]1(?=[\\\/]))", re.IGNORECASE)
-CONANDIR_REPLACEMENT = '>'
+CONANDIR_REPLACEMENT = "<CONAN_USER_HOME>"
 
 def canonicalizeConanPath(str: str):
     # Check for Conan short folder (c:\.conan\)
@@ -1343,7 +1347,7 @@ def canonicalizeConanPath(str: str):
 
 
 QT_DIR = None
-QTDIR_REPLACEMENT = "<"
+QTDIR_REPLACEMENT = "<QT_DIR>"
 RE_QT_DIR = re.compile(rf"^(.*[\\\/]Qt[\\\/]\d+\.\d+\.\d+(?=[\\\/]))", re.IGNORECASE)
 
 def canonicalizeQtPath(str: str):
@@ -1357,6 +1361,16 @@ def canonicalizeQtPath(str: str):
     return (result, result is not str)
 
 def collapseDirToPlaceholder(path):
+    if BASEDIR is None:
+        printTraceStatement("BASEDIR = None")
+    else:
+        printTraceStatement(f"BASEDIR = {BASEDIR}")
+
+    if BASEDIR is None:
+        printTraceStatement("BUILDDIR = None")
+    else:
+        printTraceStatement(f"BUILDDIR = {BUILDDIR}")
+
     (path, done) = collapseBuildDirToPlaceholder(path)
     if done:
         return path
@@ -1373,12 +1387,39 @@ def collapseDirToPlaceholder(path):
     if done:
         return path
 
+    (path, done) = canonicalizeEnvPath(path)
+    if done:
+        return path
+
     return path
 
+def canonicalizeEnvPath(str: str):
+    real_path = os.path.realpath(str)
+    # Order matters!
+    env_vars = ["VCINSTALLDIR",
+                "WindowsSdkDir",
+                "ExtensionSdkDir",
+                "VSINSTALLDIR",
+                "CommonProgramFiles",
+                "CommonProgramFiles(x86)", 
+                "ProgramFiles", 
+                "ProgramFiles(x86)", 
+                "ProgramData",
+                "USERPROFILE",
+                "SystemRoot",
+                "SystemDrive"]
+    for e in env_vars:
+        env_var = os.environ.get(e)
+        if env_var is not None:
+            env_path = os.path.realpath(os.path.normpath(os.path.normcase(env_var)))
+            if real_path.startswith(env_path + os.path.sep):
+                return (real_path.replace(env_path, f"<env:{e}>"), True)
+    return (str, False)
+        
 # Regex for replacing the following with '?':
 # 
-# #include <BASE_DIR/....>  =>  #include <*/....>
-# #include "BASE_DIR/...."  =>  #include "*/...."
+# #include <BASE_DIR/....>  =>  #include <<BASE_DIR>/....>
+# #include "BASE_DIR/...."  =>  #include "<BASE_DIR>/...."
 # // BASE_DIR/....          =>  // ?/....
 def getBaseDirSourceRegex():
     if BASEDIR is None:
