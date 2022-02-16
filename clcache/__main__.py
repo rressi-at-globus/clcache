@@ -1285,6 +1285,8 @@ def expandDirPlaceholder(path):
                 return os.path.join(short_path, os.path.sep.join(path_parts[9:]))
         else:
             return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
+    elif path.startswith(QTDIR_REPLACEMENT) and QT_DIR is not None:
+        return path.replace(QTDIR_REPLACEMENT, QT_DIR, 1)
     else:
         return path
 
@@ -1336,15 +1338,41 @@ def canonicalizeConanPath(str: str):
                 str = RE_CONAN_USER_SHORT.sub(real_path.replace("\\", "\\\\"), str)
                 
     # Otherwise check for long folder
-    return (RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, str), True)
-    
+    result = RE_CONAN_USER_HOME.sub(CONANDIR_REPLACEMENT, str)
+    return (result, result is not str)
+
+
+QT_DIR = None
+QTDIR_REPLACEMENT = "<"
+RE_QT_DIR = re.compile(rf"^(.*[\\\/]Qt[\\\/]\d+\.\d+\.\d+(?=[\\\/]))", re.IGNORECASE)
+
+def canonicalizeQtPath(str: str):
+    global QT_DIR
+    if QT_DIR is None:
+        m = RE_QT_DIR.match(str)
+        if m is not None:
+            QT_DIR = m.group(1)
+
+    result = RE_QT_DIR.sub(QTDIR_REPLACEMENT, str)
+    return (result, result is not str)
 
 def collapseDirToPlaceholder(path):
     (path, done) = collapseBuildDirToPlaceholder(path)
-    if not done:
-        (path, done) = collapseBaseDirToPlaceholder(path)
-        if not done:
-            (path, done) = canonicalizeConanPath(path)
+    if done:
+        return path
+
+    (path, done) = collapseBaseDirToPlaceholder(path)
+    if done:
+        return path
+
+    (path, done) = canonicalizeConanPath(path)
+    if done:
+        return path
+
+    (path, done) = canonicalizeQtPath(path)
+    if done:
+        return path
+
     return path
 
 # Regex for replacing the following with '?':
