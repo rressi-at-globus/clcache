@@ -39,7 +39,7 @@ from pymemcache.serde import (python_memcache_serializer,
 
 
 VERSION = "4.2.10-dgehri"
-CACHE_VERSION = "4"
+CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
 
@@ -1486,6 +1486,7 @@ def expandDirPlaceholderInCompileOutput(compilerOutput: str, re: Pattern):
             line = re.sub(r"\1" + file_path.replace("\\", "\\\\"), line)
         lines.append(line)
 
+    lines.append("")
     return '\r\n'.join(lines)
 
 
@@ -1501,6 +1502,7 @@ def collapseDirPlaceholderInCompileOutput(compilerOutput: str, re: Pattern):
             line = re.sub(r"\1" + file_path.replace("\\", "\\\\"), line)
         lines.append(line)
 
+    lines.append("")
     return '\r\n'.join(lines)
 
 
