@@ -160,7 +160,7 @@ def getBaseDirDiagnosticsRegex(path):
 
 BASEDIR_DIAG_RE = getBaseDirDiagnosticsRegex(re.sub(r'[/\\]', r'[\\\\/]', BASEDIR)) if BASEDIR is not None else None
 BASEDIR_DIAG_RE_INV = getBaseDirDiagnosticsRegex(re.escape(BASEDIR_REPLACEMENT)) if BASEDIR is not None else None
-BASEDIR_ESC = BASEDIR.replace('\\', '/')
+BASEDIR_ESC = BASEDIR.replace('\\', '/') if BASEDIR is not None else None
 
 def getBuildDirDiagnosticsRegex(path):
     regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{path})([^:?*"<>|]+:)';
