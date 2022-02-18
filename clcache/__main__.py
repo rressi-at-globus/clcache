@@ -1912,6 +1912,8 @@ def processSingleSource(compiler, cmdLine, sourceFile, objectFile, environment):
 
     except IncludeNotFoundException:
         return *invokeRealCompiler(compiler, cmdLine, environment=environment), False
+    except OSError:
+        return *invokeRealCompiler(compiler, cmdLine, environment=environment), False
     except CompilerFailedException as e:
         return e.getReturnTuple()
     except CacheLockException as e:
