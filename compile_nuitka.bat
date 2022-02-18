@@ -1,4 +1,5 @@
 call venv_py3\Scripts\activate.bat
+set PATH=C:\Program Files\Conan\conan;%PATH%
 python -m nuitka --standalone --plugin-enable=multiprocessing --plugin-enable=pylint-warnings --mingw64 .\clcache
 pushd conan
 set CONAN_REVISIONS_ENABLED=1
