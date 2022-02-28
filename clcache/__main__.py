@@ -28,7 +28,6 @@ import threading
 import time
 import scandir
 import contextlib
-import glob
 from tempfile import TemporaryFile
 from typing import Any, List, Pattern, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
@@ -38,7 +37,7 @@ from pymemcache.serde import (python_memcache_serializer,
                               python_memcache_deserializer)
 
 
-VERSION = "4.2.10-dgehri"
+VERSION = "4.2.11-dgehri"
 CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
@@ -132,7 +131,7 @@ def childDirectories(path, absolute=True):
 
 def normalizeDir(dir):
     if dir:
-        dir = os.path.normcase(os.path.realpath(dir))
+        dir = os.path.normcase(os.path.abspath(os.path.normpath(dir)))
         if dir.endswith(os.path.sep):
             dir = dir[0:-1]
         return dir
@@ -389,10 +388,14 @@ class ManifestRepository:
 
         commandLine = []
         argumentsWithPaths = ("AI", "I", "FU", "external:I", "imsvc")
+        argumentsToUnifyAndSort = ("D", "MD", "MT", "W0", "W1", "W2", "W3", "W4", "Wall", "Wv",
+                                   "WX", "w1", "w2", "w3", "w4", "we", "wo", "wd", "Z7", "nologo", "showIncludes")
         for k in sorted(arguments.keys()):
             if k in argumentsWithPaths:
                 commandLine.extend(
                     ["/" + k + collapseBasedirInCmdPath(arg) for arg in arguments[k]])
+            elif k in argumentsToUnifyAndSort:
+                commandLine.extend(["/" + k + arg for arg in list(dict.fromkeys(arguments[k]))])
             else:
                 commandLine.extend(["/" + k + arg for arg in arguments[k]])
 
@@ -1311,14 +1314,14 @@ def getFileHash(filePath, additionalData=None):
     with open(filePath, 'rb') as inFile:
         hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
 
-    # printTraceStatement("File hash: {} => {}".format(filePath, hasher.hexdigest()))
+    printTraceStatement("File hash: {} => {}".format(filePath, hasher.hexdigest()))
 
     if additionalData is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(additionalData.encode("UTF-8"))
-        # printTraceStatement("AdditionalData Hash: {}: {}".format(hasher.hexdigest(), additionalData))
+        printTraceStatement("AdditionalData Hash: {}: {}".format(hasher.hexdigest(), additionalData))
 
     return hasher.hexdigest()
 
@@ -2532,6 +2535,10 @@ class ProfilerError(Exception):
 
 
 def mainWrapper():
+    printTraceStatement(f"BASEDIR = {BASEDIR}")
+    printTraceStatement(f"BUILDDIR = {BUILDDIR}")
+
+
     if 'CLCACHE_PROFILE' in os.environ:
         INVOCATION_HASH = getStringHash(','.join(sys.argv))
         CALL_SCRIPT = '''
