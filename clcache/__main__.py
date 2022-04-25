@@ -37,7 +37,7 @@ from pymemcache.serde import (python_memcache_serializer,
                               python_memcache_deserializer)
 
 
-VERSION = "4.2.11-dgehri"
+VERSION = "4.2.12-dgehri"
 CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
@@ -1967,6 +1967,15 @@ class CommandLineAnalyzer:
 
 def invokeRealCompiler(compilerBinary, cmdLine, captureOutput=False, outputAsString=True, environment=None):
     realCmdline = [compilerBinary] + cmdLine
+
+    # if command line longer than 32767 chars, use a response file
+    # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
+    if len(" ".join(realCmdline)) >= 32000:  # keep some chars as a safety margin
+        with TemporaryFile(mode='wt', suffix=".rsp") as rspFile:
+            rspFile.writelines(' '.join(cmdLine) + '\n')
+            rspFile.flush()
+            return invokeRealCompiler(compilerBinary, ["@" + os.path.realpath(rspFile.name)], captureOutput, outputAsString, environment)
+
     printTraceStatement("Invoking real compiler as {}".format(realCmdline))
 
     environment = environment or os.environ
