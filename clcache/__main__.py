@@ -33,12 +33,11 @@ from typing import Any, List, Pattern, Tuple, Iterator, Dict
 from atomicwrites import atomic_write
 from pathlib import Path
 
-
 from couchbase.cluster import Cluster, ClusterOptions
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import QueryOptions
 
-VERSION = "4.2.11-dgehri"
+VERSION = "4.2.13-rressi"
 CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
@@ -90,13 +89,11 @@ ManifestEntry = namedtuple('ManifestEntry', ['includeFiles', 'includesContentHas
 
 CompilerArtifacts = namedtuple('CompilerArtifacts', ['objectFilePath', 'stdout', 'stderr'])
 
-
 def get_actual_filename(name):
     try:
         return str(Path(name).resolve())
     except:
         return name
-
 
 def printBinary(stream, rawData):
     with OUTPUT_LOCK:
