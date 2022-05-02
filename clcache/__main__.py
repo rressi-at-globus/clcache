@@ -284,6 +284,7 @@ class ManifestSection:
                 jsonobject = {'entries': entries}
                 json.dump(jsonobject, outFile, sort_keys=True, indent=2)
 
+
     def getManifest(self, manifestHash):
         fileName = self.manifestPath(manifestHash)
         if not os.path.exists(fileName):
@@ -363,16 +364,18 @@ class ManifestRepository:
         collapseBasedirInCmdPath = lambda path: collapseDirToPlaceholder(os.path.normcase(os.path.abspath(path)))
 
         commandLine = []
-        argumentsWithPaths = ("AI", "I", "FU", "external:I", "imsvc")
-        argumentsToUnifyAndSort = ("D", "MD", "MT", "W0", "W1", "W2", "W3", "W4", "Wall", "Wv",
-                                   "WX", "w1", "w2", "w3", "w4", "we", "wo", "wd", "Z7", "nologo", "showIncludes")
+        argumentsWithPaths = {"AI", "I", "FU", "external:I", "imsvc"}
+        argumentsToUnifyAndSort = {"D", "MD", "MT", "W0", "W1", "W2", "W3", 
+                                   "W4", "Wall", "Wv", "WX", "w1", "w2", "w3", 
+                                   "w4", "we", "wo", "wd", "Z7", "nologo", 
+                                   "showIncludes"}
         for k in sorted(arguments.keys()):
             if k in argumentsWithPaths:
-                commandLine.extend(["/" + k + collapseBasedirInCmdPath(arg) for arg in arguments[k]])
+                commandLine.extend(f"/{k}{collapseBasedirInCmdPath(arg)}" for arg in arguments[k])
             elif k in argumentsToUnifyAndSort:
-                commandLine.extend(["/" + k + arg for arg in list(dict.fromkeys(arguments[k]))])
+                commandLine.extend(f"/{k}{arg}" for arg in sorted(set(arguments[k])))
             else:
-                commandLine.extend(["/" + k + arg for arg in arguments[k]])
+                commandLine.extend(f"/{k}{arg}" for arg in arguments[k])
 
         commandLine.extend(collapseBasedirInCmdPath(arg) for arg in inputFiles)
 
